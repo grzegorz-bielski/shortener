@@ -1,31 +1,19 @@
+{-# LANGUAGE DeriveGeneric     #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Main where
 
-import           Control.Monad          (replicateM)
-import           Control.Monad.IO.Class (liftIO)
-import qualified Data.ByteString.Char8  as BC
-import           Data.Text.Encoding     (decodeUtf8, encodeUtf8)
-import qualified Data.Text.Lazy         as TL
-import qualified Database.Redis         as R
-import           Network.URI            (URI, parseURI)
-import qualified System.Random          as SR
+import           Control.Monad.IO.Class    (liftIO)
+import qualified Data.Aeson                as A
+import qualified Data.ByteString.Char8     as BC
+import qualified Data.Text.Lazy            as TL
+import qualified Database.Redis            as R
+import           GHC.Generics
+import           Lib                       (generateHash)
+import           Network.HTTP.Types.Status (mkStatus)
+import           Network.URI               (parseURI)
+import           Network.URI.Encode        (decodeBSToText, encodeTextToBS)
 import           Web.Scotty
-
-alphaNum :: String
-alphaNum = ['A'..'Z'] <> ['0'..'9']
-
-randomElement :: String -> IO Char
-randomElement xs = do
-  let maxIndex :: Int
-      maxIndex = length xs - 1
-  -- Right of arrow is IO Int, so randomDigit is Int
-  randomDigit <- SR.randomRIO (0, maxIndex) :: IO Int
-  return (xs !! randomDigit)
-
-shortyGen :: IO String
-shortyGen =
-  replicateM 7 (randomElement alphaNum)
 
 saveURI :: R.Connection
         -> BC.ByteString
@@ -39,55 +27,72 @@ getURI  :: R.Connection
         -> IO (Either R.Reply (Maybe BC.ByteString))
 getURI conn shortURI = R.runRedis conn $ R.get shortURI
 
-linkShorty :: String -> String
-linkShorty shorty =
-  concat [ "<a href=\""
-         , shorty
-         , "\">Copy and paste your short URL</a>"
-         ]
+data APIResponse = APIReponse {
+ msg :: TL.Text
+} deriving (Show, Generic)
 
-shortyCreated :: Show a => a -> String -> TL.Text
-shortyCreated resp shawty =
-  TL.concat [ TL.pack (show resp)
-            , " shorty is: ", TL.pack (linkShorty shawty)
-            ]
+respond :: TL.Text -> ActionM ()
+respond res = json $ APIReponse res
 
-shortyAintUri :: TL.Text -> TL.Text
-shortyAintUri uri =
-  TL.concat [ uri
-            , " wasn't a url, did you forget http://?"
-            ]
+addStatus :: Int -> BC.ByteString -> ActionM ()
+addStatus num str = status $ mkStatus num str
 
-shortyFound :: TL.Text -> TL.Text
-shortyFound tbs =
-  TL.concat ["<a href=\"", tbs, "\">", tbs, "</a>"]
+data APIRequest = APIRequest {
+      url :: TL.Text
+    } deriving (Show, Generic)
+
+instance A.FromJSON APIRequest where
+  parseJSON = A.withObject "APIRequest" $
+    \v -> APIRequest <$> (A..:) v "url"
+
+instance A.ToJSON APIResponse
+
 
 app :: R.Connection -> ScottyM ()
 app rConn = do
-  get "/" $ do
-    uri <- param "uri"
-    let parsedUri :: Maybe URI
+  post "/api" $ do
+    req <- jsonData
+
+    let uri = url req
         parsedUri = parseURI (TL.unpack uri)
+
     case parsedUri of
       Just _  -> do
-        shawty <- liftIO shortyGen
-        let shorty = BC.pack shawty
-            uri' = encodeUtf8 (TL.toStrict uri)
-        resp <- liftIO (saveURI rConn shorty uri')
-        html (shortyCreated resp shawty)
-      Nothing -> text (shortyAintUri uri)
-  get "/:short" $ do
+        hash <- liftIO generateHash
+
+        let hash' = BC.pack hash
+            uriEndoced = encodeTextToBS $ TL.toStrict uri
+            saveURI' = saveURI rConn hash' uriEndoced
+
+        _ <- liftIO saveURI'
+        respond $ "link: " <> TL.pack hash
+
+      Nothing -> do
+        respond $ uri <> " wasn't a url, did you forget http://?"
+        addStatus 400 "Incorrect format"
+
+
+  get "/api/:short" $ do
     short <- param "short"
-    uri <- liftIO (getURI rConn short)
+    uri <- liftIO $ getURI rConn short
+
     case uri of
-      Left reply -> text (TL.pack (show reply))
+      Left reply -> do
+          addStatus 500 "Unknown error"
+          respond $ TL.pack $ show reply
+
       Right mbBS -> case mbBS of
-        Nothing -> text "uri not found"
-        Just bs -> html (shortyFound tbs)
-          where tbs :: TL.Text
-                tbs = TL.fromStrict (decodeUtf8 bs)
+        Nothing -> do
+          addStatus 404 "Not found"
+          respond "URI not found"
+
+        Just bs -> respond tbs
+          where tbs = TL.fromStrict $ decodeBSToText bs
+
+  get "/" $ do
+    addStatus 404 "Not found"
+    respond "Incorrect route"
 
 main :: IO ()
-main = do
-  rConn <- R.connect R.defaultConnectInfo
-  scotty 3000 (app rConn)
+main = R.connect R.defaultConnectInfo >>=
+    \rConn -> scotty 3000 $ app rConn

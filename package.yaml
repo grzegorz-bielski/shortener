@@ -29,7 +29,10 @@ dependencies:
   - scotty
   - semigroups
   - text
+  - http-types
   - transformers
+  - uri-encode
+  - aeson
 
 library:
   source-dirs: src
