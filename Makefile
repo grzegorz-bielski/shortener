@@ -31,9 +31,7 @@ build:
 
 .PHONY: watch
 watch:
-	stack build --fast --pedantic --test --file-watch --exec 'sh -c "pkill shortener-exe; stack exec shortener-exe"'
-	#  --exec "sh -c "stack exec shortener-exe""
-	#  --exec "sh -c "pkill shortener-exe; stack exec shortener-exe""
+	stack build --fast --pedantic --test --file-watch --exec 'sh -c "pkill shortener-exe; stack exec shortener-exe &"'
 
 # prod setup
 
