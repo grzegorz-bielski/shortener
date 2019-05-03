@@ -9,6 +9,7 @@ import           Lib                    (addStatus, generateHash, getURI,
                                          respond, saveURI, url)
 import           Network.URI            (parseURI)
 import           Network.URI.Encode     (decodeBSToText)
+import           System.Environment     (lookupEnv)
 import           Web.Scotty
 
 getShort :: R.Connection -> ActionM ()
@@ -63,6 +64,13 @@ app rConn = do
   get "/api/:short" $ saveShort rConn
   get "/" notFoundRoute
 
+getDBHost :: IO String
+getDBHost = parseEnv <$> lookupEnv "DBHOST"
+    where parseEnv (Just val) = val
+          parseEnv Nothing    = "localhost"
+
 main :: IO ()
-main = R.connect R.defaultConnectInfo >>=
-    \rConn -> scotty 3000 $ app rConn
+main = do
+  dbHost <- getDBHost
+  rConn <- R.connect R.defaultConnectInfo { R.connectHost = dbHost }
+  scotty 3000 $ app rConn

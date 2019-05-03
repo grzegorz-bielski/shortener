@@ -19,3 +19,7 @@ make dev
 ```
 make prod
 ```
+
+### caveats
+
+building packages from stack is brutal on macOS inside Docker thus you might want to increase ram to 4GiB inside docker desktop preferences
